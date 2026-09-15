@@ -41,6 +41,18 @@ cargo build --release
 # binary at target/release/branchdiff
 ```
 
+### Releases
+
+Pushing a version tag triggers the `release` GitHub Actions workflow
+(`.github/workflows/release.yml`), which builds binaries for Linux, macOS
+(x86_64 + arm64), and Windows and attaches them (with sha256 checksums) to a new
+GitHub Release:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Usage
 
 ```sh
