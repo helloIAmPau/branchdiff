@@ -1,0 +1,21 @@
+[package]
+name = "branchdiff"
+version = "0.1.0"
+edition = "2021"
+description = "A TUI to explore the diff between two git branches, GitHub-PR style"
+
+[[bin]]
+name = "branchdiff"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.29"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# fancy-regex backend keeps this pure-Rust (no oniguruma / C toolchain needed).
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+# filesystem watching for auto-refresh
+notify = "6"
+
+[profile.release]
+opt-level = 2
