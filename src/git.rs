@@ -132,3 +132,118 @@ pub fn file_diff(base: &str, head: &str, file: &ChangedFile) -> Result<String> {
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    // The functions under test shell out to `git` in the *process* working
+    // directory, which is global state. Serialize the git tests (and the cwd
+    // change they need) behind one mutex so they never race each other.
+    static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+    fn git_in(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Build a repo with a `base` branch and a `head` branch that adds, modifies,
+    /// deletes and renames files. Returns the repo path.
+    fn make_repo() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("branchdiff_git_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        git_in(&dir, &["init", "-q"]);
+        git_in(&dir, &["config", "user.email", "t@t.com"]);
+        git_in(&dir, &["config", "user.name", "t"]);
+
+        // Base branch.
+        fs::write(dir.join("keep.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        fs::write(dir.join("del.txt"), "remove me\n").unwrap();
+        fs::write(dir.join("old.txt"), "1\n2\n3\n4\n5\n6\n7\n8\n").unwrap();
+        git_in(&dir, &["add", "-A"]);
+        git_in(&dir, &["commit", "-qm", "base"]);
+        git_in(&dir, &["branch", "-M", "base"]);
+
+        // Head branch: modify / delete / rename / add.
+        git_in(&dir, &["checkout", "-qb", "head"]);
+        fs::write(dir.join("keep.txt"), "alpha\nBETA\ngamma\n").unwrap();
+        fs::remove_file(dir.join("del.txt")).unwrap();
+        fs::rename(dir.join("old.txt"), dir.join("new.txt")).unwrap();
+        fs::write(dir.join("add.txt"), "brand new\n").unwrap();
+        git_in(&dir, &["add", "-A"]);
+        git_in(&dir, &["commit", "-qm", "head"]);
+
+        dir
+    }
+
+    #[test]
+    fn changed_files_reports_every_status() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let dir = make_repo();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let files = changed_files("base", "head").unwrap();
+        let by_path: HashMap<&str, &ChangedFile> =
+            files.iter().map(|f| (f.path.as_str(), f)).collect();
+
+        assert_eq!(by_path["keep.txt"].status, 'M');
+        assert_eq!(by_path["add.txt"].status, 'A');
+        assert_eq!(by_path["del.txt"].status, 'D');
+
+        // Rename is detected (-M); path is the new name, old_path the source.
+        let renamed = &by_path["new.txt"];
+        assert_eq!(renamed.status, 'R');
+        assert_eq!(renamed.old_path.as_deref(), Some("old.txt"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn file_diff_and_read_and_branch() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let dir = make_repo();
+        std::env::set_current_dir(&dir).unwrap();
+
+        // Per-file diff for the modified file shows the swapped line.
+        let modified = ChangedFile {
+            status: 'M',
+            path: "keep.txt".into(),
+            old_path: None,
+        };
+        let raw = file_diff("base", "head", &modified).unwrap();
+        assert!(raw.contains("-beta"));
+        assert!(raw.contains("+BETA"));
+
+        // read_file_at pulls blob contents at a revision.
+        assert_eq!(read_file_at("head", "add.txt").unwrap(), "brand new\n");
+        assert_eq!(
+            read_file_at("base", "keep.txt").unwrap(),
+            "alpha\nbeta\ngamma\n"
+        );
+
+        // We committed onto the `head` branch last.
+        assert_eq!(current_branch().unwrap(), "head");
+
+        // verify_repo / verify_ref behaviour.
+        assert!(verify_repo().is_ok());
+        assert!(verify_ref("base").is_ok());
+        assert!(verify_ref("does-not-exist").is_err());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

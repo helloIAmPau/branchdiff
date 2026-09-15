@@ -54,3 +54,43 @@ impl Highlighter {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_theme_loads() {
+        // Highlighter::new panics if the bundled theme fails to parse.
+        let _ = Highlighter::new();
+    }
+
+    #[test]
+    fn picks_syntax_by_extension() {
+        let hl = Highlighter::new();
+        assert_eq!(hl.syntax_for("src/main.rs").name, "Rust");
+    }
+
+    #[test]
+    fn unknown_extension_falls_back_to_plain_text() {
+        let hl = Highlighter::new();
+        let plain = hl.syntax_for("mystery.zzz").name.clone();
+        assert_eq!(plain, hl.syntax_for("noext").name);
+    }
+
+    #[test]
+    fn line_colors_has_one_color_per_char() {
+        let hl = Highlighter::new();
+        let syntax = hl.syntax_for("main.rs");
+        let text = "let x = 1;";
+        assert_eq!(hl.line_colors(syntax, text).len(), text.chars().count());
+    }
+
+    #[test]
+    fn line_colors_counts_unicode_by_char_not_byte() {
+        let hl = Highlighter::new();
+        let syntax = hl.syntax_for("notes.txt");
+        let text = "café ☕"; // multi-byte chars
+        assert_eq!(hl.line_colors(syntax, text).len(), text.chars().count());
+    }
+}

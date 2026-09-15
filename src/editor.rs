@@ -6,7 +6,7 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum EditMode {
     Normal,
     Insert,
@@ -381,5 +381,222 @@ impl Editor {
             EditMode::Insert => "INSERT",
             EditMode::Command => "COMMAND",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::crossterm::event::KeyCode;
+
+    fn ed(content: &str) -> Editor {
+        Editor::new("test.txt".to_string(), content)
+    }
+
+    /// Feed a sequence of character keys.
+    fn typ(ed: &mut Editor, keys: &str) {
+        for c in keys.chars() {
+            ed.handle_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+    }
+
+    fn press(ed: &mut Editor, code: KeyCode) {
+        ed.handle_key(KeyEvent::from(code));
+    }
+
+    #[test]
+    fn new_splits_lines_and_drops_trailing_newline() {
+        let e = ed("one\ntwo\n");
+        assert_eq!(e.lines, vec!["one", "two"]);
+        assert_eq!(e.cy, 0);
+        assert_eq!(e.cx, 0);
+        assert!(!e.dirty);
+    }
+
+    #[test]
+    fn new_empty_content_has_one_blank_line() {
+        let e = ed("");
+        assert_eq!(e.lines, vec![""]);
+    }
+
+    #[test]
+    fn insert_mode_types_text() {
+        let mut e = ed("");
+        typ(&mut e, "i");
+        assert_eq!(e.mode, EditMode::Insert);
+        typ(&mut e, "hello");
+        assert_eq!(e.lines[0], "hello");
+        assert_eq!(e.cx, 5);
+        assert!(e.dirty);
+        press(&mut e, KeyCode::Esc);
+        assert_eq!(e.mode, EditMode::Normal);
+        // Esc steps the cursor back one, vim-style.
+        assert_eq!(e.cx, 4);
+    }
+
+    #[test]
+    fn append_starts_after_cursor() {
+        let mut e = ed("ab");
+        typ(&mut e, "a"); // append
+        assert_eq!(e.cx, 1);
+        typ(&mut e, "X");
+        assert_eq!(e.lines[0], "aXb");
+    }
+
+    #[test]
+    fn open_line_below_and_above() {
+        let mut e = ed("line");
+        typ(&mut e, "o");
+        assert_eq!(e.lines, vec!["line", ""]);
+        assert_eq!(e.cy, 1);
+        press(&mut e, KeyCode::Esc);
+        typ(&mut e, "O");
+        assert_eq!(e.cy, 1);
+        assert_eq!(e.lines, vec!["line", "", ""]);
+    }
+
+    #[test]
+    fn horizontal_motions_clamp() {
+        let mut e = ed("abc");
+        typ(&mut e, "l"); // 0 -> 1
+        typ(&mut e, "l"); // 1 -> 2
+        typ(&mut e, "l"); // clamps at len-1 in normal mode boundary (cur_len)
+        assert!(e.cx <= e.cur_len());
+        typ(&mut e, "0");
+        assert_eq!(e.cx, 0);
+        typ(&mut e, "$");
+        assert_eq!(e.cx, 3);
+    }
+
+    #[test]
+    fn vertical_motion_clamps_column() {
+        let mut e = ed("longline\nhi");
+        typ(&mut e, "$"); // cx = 8
+        typ(&mut e, "j"); // move to short line -> clamp
+        assert_eq!(e.cy, 1);
+        assert_eq!(e.cx, 2);
+    }
+
+    #[test]
+    fn gg_and_G_jump_to_ends() {
+        let mut e = ed("a\nb\nc");
+        typ(&mut e, "G");
+        assert_eq!(e.cy, 2);
+        typ(&mut e, "gg");
+        assert_eq!(e.cy, 0);
+    }
+
+    #[test]
+    fn x_deletes_char_under_cursor() {
+        let mut e = ed("abc");
+        typ(&mut e, "x");
+        assert_eq!(e.lines[0], "bc");
+        assert!(e.dirty);
+    }
+
+    #[test]
+    fn capital_d_deletes_to_end_of_line() {
+        let mut e = ed("hello world");
+        typ(&mut e, "l"); // cx=1
+        typ(&mut e, "D");
+        assert_eq!(e.lines[0], "h");
+    }
+
+    #[test]
+    fn dd_deletes_line_and_last_line_is_cleared_not_removed() {
+        let mut e = ed("a\nb");
+        typ(&mut e, "dd");
+        assert_eq!(e.lines, vec!["b"]);
+        typ(&mut e, "dd");
+        assert_eq!(e.lines, vec![""]); // never drops below one line
+    }
+
+    #[test]
+    fn word_motions() {
+        let mut e = ed("foo bar baz");
+        typ(&mut e, "w");
+        assert_eq!(e.cx, 4); // start of "bar"
+        typ(&mut e, "w");
+        assert_eq!(e.cx, 8); // start of "baz"
+        typ(&mut e, "b");
+        assert_eq!(e.cx, 4); // back to "bar"
+    }
+
+    #[test]
+    fn backspace_joins_lines() {
+        let mut e = ed("ab\ncd");
+        typ(&mut e, "j"); // cy=1
+        typ(&mut e, "i"); // insert mode at col 0
+        press(&mut e, KeyCode::Backspace);
+        assert_eq!(e.lines, vec!["abcd"]);
+        assert_eq!(e.cy, 0);
+        assert_eq!(e.cx, 2);
+    }
+
+    #[test]
+    fn enter_splits_line() {
+        let mut e = ed("abcd");
+        typ(&mut e, "ll"); // cx=2
+        typ(&mut e, "i");
+        press(&mut e, KeyCode::Enter);
+        assert_eq!(e.lines, vec!["ab", "cd"]);
+    }
+
+    #[test]
+    fn unicode_insert_and_delete_by_char() {
+        let mut e = ed("héllo");
+        typ(&mut e, "x"); // delete 'h'
+        assert_eq!(e.lines[0], "éllo");
+        typ(&mut e, "x"); // delete multi-byte 'é'
+        assert_eq!(e.lines[0], "llo");
+    }
+
+    #[test]
+    fn quit_blocked_while_dirty_then_forced() {
+        let mut e = ed("x");
+        typ(&mut e, "i");
+        typ(&mut e, "y");
+        press(&mut e, KeyCode::Esc);
+        assert!(e.dirty);
+        // :q refuses on unsaved changes
+        run_cmd(&mut e, "q");
+        assert!(!e.quit);
+        assert!(e.status.contains("No write"));
+        // :q! forces
+        run_cmd(&mut e, "q!");
+        assert!(e.quit);
+    }
+
+    #[test]
+    fn write_persists_and_clears_dirty() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("branchdiff_ed_{}.txt", std::process::id()));
+        let mut e = Editor::new(path.to_string_lossy().to_string(), "old\n");
+        typ(&mut e, "A"); // append at end of line
+        typ(&mut e, "!");
+        press(&mut e, KeyCode::Esc);
+        assert!(e.dirty);
+        run_cmd(&mut e, "w");
+        assert!(!e.dirty);
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(written, "old!\n");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn unknown_command_reports_error() {
+        let mut e = ed("x");
+        run_cmd(&mut e, "bogus");
+        assert!(e.status.contains("Not an editor command"));
+        assert_eq!(e.mode, EditMode::Normal);
+    }
+
+    /// Enter command mode, type the command, and press Enter.
+    fn run_cmd(ed: &mut Editor, cmd: &str) {
+        ed.handle_key(KeyEvent::from(KeyCode::Char(':')));
+        for c in cmd.chars() {
+            ed.handle_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        ed.handle_key(KeyEvent::from(KeyCode::Enter));
     }
 }

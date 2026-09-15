@@ -132,3 +132,105 @@ pub fn flatten(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cf(status: char, path: &str) -> ChangedFile {
+        ChangedFile {
+            status,
+            path: path.to_string(),
+            old_path: None,
+        }
+    }
+
+    fn all_expanded(roots: &[Node]) -> HashSet<String> {
+        let mut s = HashSet::new();
+        all_dir_paths(roots, &mut s);
+        s
+    }
+
+    #[test]
+    fn nests_paths_into_directories() {
+        let files = vec![cf('M', "src/app.rs"), cf('A', "src/ui/mod.rs")];
+        let roots = build_tree(&files);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].name, "src");
+        assert!(matches!(roots[0].kind, NodeKind::Dir));
+        assert_eq!(roots[0].path, "src");
+        // src contains the `ui` dir and the `app.rs` file.
+        let names: Vec<&str> = roots[0].children.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["ui", "app.rs"]); // dirs before files
+    }
+
+    #[test]
+    fn directories_sort_before_files_then_alphabetical() {
+        let files = vec![
+            cf('M', "z.txt"),
+            cf('M', "a.txt"),
+            cf('M', "beta/x.rs"),
+            cf('M', "alpha/y.rs"),
+        ];
+        let roots = build_tree(&files);
+        let names: Vec<&str> = roots.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "beta", "a.txt", "z.txt"]);
+    }
+
+    #[test]
+    fn file_index_points_back_to_source_slice() {
+        let files = vec![cf('A', "a.rs"), cf('D', "dir/b.rs")];
+        let roots = build_tree(&files);
+        let expanded = all_expanded(&roots);
+        let mut rows = Vec::new();
+        flatten(&roots, &expanded, 0, &mut rows);
+
+        for row in &rows {
+            if let Some(i) = row.file_index {
+                assert_eq!(row.path, files[i].path);
+                assert_eq!(row.status, Some(files[i].status));
+            }
+        }
+    }
+
+    #[test]
+    fn all_dir_paths_collects_nested_dirs() {
+        let files = vec![cf('M', "a/b/c.rs"), cf('M', "a/d.rs")];
+        let roots = build_tree(&files);
+        let dirs = all_expanded(&roots);
+        assert!(dirs.contains("a"));
+        assert!(dirs.contains("a/b"));
+        assert_eq!(dirs.len(), 2);
+    }
+
+    #[test]
+    fn collapsed_dir_hides_its_children() {
+        let files = vec![cf('M', "a/b/c.rs"), cf('M', "top.rs")];
+        let roots = build_tree(&files);
+
+        // Fully expanded: dir a, dir a/b, file c.rs, file top.rs = 4 rows.
+        let expanded = all_expanded(&roots);
+        let mut rows = Vec::new();
+        flatten(&roots, &expanded, 0, &mut rows);
+        assert_eq!(rows.len(), 4);
+
+        // Collapse everything: only the top-level dir `a` and file `top.rs`.
+        let none = HashSet::new();
+        let mut rows = Vec::new();
+        flatten(&roots, &none, 0, &mut rows);
+        let visible: Vec<&str> = rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(visible, vec!["a", "top.rs"]);
+        assert!(!rows[0].expanded);
+    }
+
+    #[test]
+    fn flatten_reports_depth() {
+        let files = vec![cf('M', "a/b/c.rs")];
+        let roots = build_tree(&files);
+        let expanded = all_expanded(&roots);
+        let mut rows = Vec::new();
+        flatten(&roots, &expanded, 0, &mut rows);
+        let depths: Vec<usize> = rows.iter().map(|r| r.depth).collect();
+        assert_eq!(depths, vec![0, 1, 2]); // a, a/b, c.rs
+    }
+}

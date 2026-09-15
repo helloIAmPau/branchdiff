@@ -1,0 +1,47 @@
+name: ci
+
+# Build and run the test suite on every push and pull request.
+on:
+  push:
+  pull_request:
+
+# Cancel superseded runs on the same ref (e.g. rapid pushes to a branch).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Cache the registry, git deps and target dir keyed on Cargo.lock.
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # The git integration tests shell out to `git`, which needs an identity to
+      # create the throwaway commits.
+      - name: Configure git for tests
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+
+      - name: Build
+        run: cargo build --locked
+
+      - name: Test
+        run: cargo test --locked

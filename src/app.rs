@@ -179,6 +179,12 @@ impl App {
             Err(_) => return,
         };
 
+        // Remember the file currently shown in the right panel and its scroll so
+        // we can restore the viewport if the same file survives the refresh.
+        let prev_file = self.current_file.map(|i| self.files[i].path.clone());
+        let prev_scroll = self.diff_scroll;
+        let prev_hscroll = self.diff_hscroll;
+
         self.files = files;
         self.roots = tree::build_tree(&self.files);
         self.diff_cache.clear();
@@ -186,6 +192,16 @@ impl App {
         // recompute_visible restores the selection by path from the old view.
         self.recompute_visible();
         self.snap_to_file();
+
+        // If the same file is still shown, keep the right panel where it was.
+        // load_selected_file (via snap_to_file) reset the scroll to the top; the
+        // draw pass clamps diff_scroll to the new content length.
+        if let Some(idx) = self.current_file {
+            if prev_file.as_deref() == Some(self.files[idx].path.as_str()) {
+                self.diff_scroll = prev_scroll;
+                self.diff_hscroll = prev_hscroll;
+            }
+        }
     }
 
     fn recompute_visible(&mut self) {
