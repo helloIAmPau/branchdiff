@@ -32,8 +32,8 @@ pub enum Focus {
 }
 
 pub struct App {
-    pub base: String,
-    pub head: String,
+    /// The branch (or ref) the working tree is being diffed against.
+    pub branch: String,
     pub files: Vec<ChangedFile>,
     pub roots: Vec<Node>,
     pub expanded: HashSet<String>,
@@ -78,13 +78,12 @@ fn is_relevant(event: &notify::Event) -> bool {
 }
 
 impl App {
-    pub fn new(base: String, head: String, files: Vec<ChangedFile>) -> Self {
+    pub fn new(branch: String, files: Vec<ChangedFile>) -> Self {
         let roots = tree::build_tree(&files);
         let mut expanded = HashSet::new();
         tree::all_dir_paths(&roots, &mut expanded);
         let mut app = App {
-            base,
-            head,
+            branch,
             files,
             roots,
             expanded,
@@ -173,7 +172,7 @@ impl App {
     /// Re-read the changed-file list and diffs from git, preserving the current
     /// expansion/selection where possible.
     fn refresh(&mut self) {
-        let files = match git::changed_files(&self.base, &self.head) {
+        let files = match git::changed_files(&self.branch) {
             Ok(f) => f,
             // Transient git state mid-write — skip this round, try again later.
             Err(_) => return,
@@ -243,7 +242,7 @@ impl App {
         self.diff_scroll = 0;
         self.diff_hscroll = 0;
         if !self.diff_cache.contains_key(&idx) {
-            let parsed = match git::file_diff(&self.base, &self.head, &self.files[idx]) {
+            let parsed = match git::file_diff(&self.branch, &self.files[idx]) {
                 Ok(raw) => diff::parse_diff(&raw),
                 Err(_) => FileDiff {
                     hunks: Vec::new(),
@@ -341,7 +340,7 @@ impl App {
         let path = self.files[idx].path.clone();
         let content = std::fs::read_to_string(&path)
             .ok()
-            .or_else(|| git::read_file_at(&self.head, &path).ok())
+            .or_else(|| git::read_file_at(&self.branch, &path).ok())
             .unwrap_or_default();
         let mut ed = Editor::new(path, &content);
         ed.status = "-- editing working tree — :w save · :q quit --".into();

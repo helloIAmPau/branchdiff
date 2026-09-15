@@ -40,11 +40,10 @@ pub fn verify_ref(r: &str) -> Result<()> {
     Ok(())
 }
 
-/// List files that differ between `base` and `head` using PR semantics
-/// (three-dot: everything on `head` since it diverged from `base`).
-pub fn changed_files(base: &str, head: &str) -> Result<Vec<ChangedFile>> {
-    let spec = format!("{base}...{head}");
-    let out = run_git(&["diff", "--name-status", "-M", &spec])?;
+/// List files that differ between `branch` and the current working tree (the
+/// files as they exist on disk, staged or not).
+pub fn changed_files(branch: &str) -> Result<Vec<ChangedFile>> {
+    let out = run_git(&["diff", "--name-status", "-M", branch])?;
     if !out.status.success() {
         bail!(
             "git diff failed: {}",
@@ -83,18 +82,6 @@ pub fn changed_files(base: &str, head: &str) -> Result<Vec<ChangedFile>> {
     Ok(files)
 }
 
-/// Name of the currently checked-out branch, or `HEAD` when detached.
-pub fn current_branch() -> Result<String> {
-    let out = run_git(&["rev-parse", "--abbrev-ref", "HEAD"])?;
-    if !out.status.success() {
-        bail!(
-            "could not determine current branch: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
 /// Contents of a file at a given revision (`git show <rev>:<path>`).
 pub fn read_file_at(rev: &str, path: &str) -> Result<String> {
     let spec = format!("{rev}:{path}");
@@ -108,14 +95,13 @@ pub fn read_file_at(rev: &str, path: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-/// Raw unified diff text for a single changed file.
-pub fn file_diff(base: &str, head: &str, file: &ChangedFile) -> Result<String> {
-    let spec = format!("{base}...{head}");
+/// Raw unified diff text for a single changed file (branch vs. working tree).
+pub fn file_diff(branch: &str, file: &ChangedFile) -> Result<String> {
     let mut args: Vec<String> = vec![
         "diff".into(),
         "-M".into(),
         "--no-color".into(),
-        spec,
+        branch.into(),
         "--".into(),
     ];
     if let Some(old) = &file.old_path {
@@ -197,7 +183,9 @@ mod tests {
         let dir = make_repo();
         std::env::set_current_dir(&dir).unwrap();
 
-        let files = changed_files("base", "head").unwrap();
+        // The working tree currently matches the `head` branch, so diffing
+        // `base` against the working tree is equivalent to base…head.
+        let files = changed_files("base").unwrap();
         let by_path: HashMap<&str, &ChangedFile> =
             files.iter().map(|f| (f.path.as_str(), f)).collect();
 
@@ -225,7 +213,7 @@ mod tests {
             path: "keep.txt".into(),
             old_path: None,
         };
-        let raw = file_diff("base", "head", &modified).unwrap();
+        let raw = file_diff("base", &modified).unwrap();
         assert!(raw.contains("-beta"));
         assert!(raw.contains("+BETA"));
 
@@ -235,9 +223,6 @@ mod tests {
             read_file_at("base", "keep.txt").unwrap(),
             "alpha\nbeta\ngamma\n"
         );
-
-        // We committed onto the `head` branch last.
-        assert_eq!(current_branch().unwrap(), "head");
 
         // verify_repo / verify_ref behaviour.
         assert!(verify_repo().is_ok());

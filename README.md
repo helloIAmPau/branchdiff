@@ -1,8 +1,9 @@
 # branchdiff
 
-A terminal UI (TUI) to explore the diff between two git branches, GitHub-PR style:
-a collapsible tree of changed files on the left, and the selected file's diff on the
-right — viewable **unified (in-place)** or **side-by-side**.
+A terminal UI (TUI) to explore the diff between your **working tree** (the
+current folder) and a git branch you pick, GitHub-PR style: a collapsible tree
+of changed files on the left, and the selected file's diff on the right —
+viewable **unified (in-place)** or **side-by-side**.
 
 Diffs are rendered in a **git-delta–style**: two-column line numbers, full-width
 add/remove backgrounds (green = added / red = removed, Claude Code shades),
@@ -20,7 +21,7 @@ flickering. Refresh is deferred while the built-in editor is open, and the tree
 selection is preserved across refreshes.
 
 ```
- branchdiff   main … feature   (4 files)
+ branchdiff   main … working tree   (4 files)
 ┌ Files ──────────────────┐┌ src/main.rs ───────────────────────── unified ┐
 │▾ src/                   ││@@ -1,3 +1,5 @@                                 │
 │  ▾ util/                ││   1    1   fn main() {                         │
@@ -56,18 +57,22 @@ git push origin v0.1.0
 ## Usage
 
 ```sh
-branchdiff <base> [head] [-C <repo-path>]
+branchdiff <branch> [-C <repo-path>]
 
 # examples
-branchdiff main my-feature      # explicit base and head
-branchdiff main                 # base vs. the CURRENT branch
-branchdiff origin/main HEAD
-branchdiff v1.0 v2.0 -C ~/code/project
+branchdiff main                 # working tree vs. main
+branchdiff origin/main          # working tree vs. origin/main
+branchdiff v1.0 -C ~/code/project
 ```
 
-`base` is the branch you would merge *into* (e.g. `main`); `head` is the branch with
-your changes. When `head` is omitted it defaults to the **current branch**. The comparison uses three-dot (`base...head`) semantics — exactly what a
-pull request shows: everything on `head` since it diverged from `base`.
+`branch` is any ref (branch, tag, or commit) you want to compare the current
+folder against. The comparison is `git diff <branch>` — the branch on the left,
+your **working tree** (all tracked changes on disk, staged or not) on the right.
+This is handy for reviewing everything you've changed relative to, say, `main`
+before you commit or open a PR.
+
+> Untracked files are not shown (that's how `git diff <branch>` behaves); `git
+> add` them first if you want them in the diff.
 
 ## Keys
 
@@ -98,7 +103,7 @@ pull request shows: everything on `head` since it diverged from `base`.
 ## Editing (vim-style)
 
 Press `e` to turn the right panel into a modal editor for the selected file. It
-loads the working-tree copy (falling back to the `head` revision) and, on `:w`,
+loads the working-tree copy (falling back to the `branch` revision) and, on `:w`,
 writes back to the file on disk. The buffer is syntax-highlighted with the same
 GitHub Dark theme.
 
@@ -111,8 +116,9 @@ GitHub Dark theme.
 
 The bottom row shows the current mode, cursor `line:col`, and messages.
 
-> Note: the diff view compares two **commits** (`base...head`), so working-tree
-> edits you save won't change that diff until they're committed on `head`.
+> Note: the diff view compares `branch` against your **working tree**, so edits
+> you save from the built-in editor show up in the diff on the next auto-refresh
+> — no commit required.
 
 ## How it works
 

@@ -54,9 +54,9 @@ fn draw_title(f: &mut Frame, area: Rect, app: &App) {
     let line = Line::from(vec![
         Span::styled(" branchdiff ", Style::default().fg(Color::Black).bg(Color::Cyan)),
         Span::raw("  "),
-        Span::styled(app.base.clone(), Style::default().fg(DEL).add_modifier(Modifier::BOLD)),
+        Span::styled(app.branch.clone(), Style::default().fg(DEL).add_modifier(Modifier::BOLD)),
         Span::styled(" … ", Style::default().fg(CTX)),
-        Span::styled(app.head.clone(), Style::default().fg(ADD).add_modifier(Modifier::BOLD)),
+        Span::styled("working tree", Style::default().fg(ADD).add_modifier(Modifier::BOLD)),
         Span::styled(
             format!("   ({} files)", app.files.len()),
             Style::default().fg(CTX),

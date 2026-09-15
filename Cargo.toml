@@ -2,7 +2,7 @@
 name = "branchdiff"
 version = "0.1.0"
 edition = "2021"
-description = "A TUI to explore the diff between two git branches, GitHub-PR style"
+description = "A TUI to explore the diff between your working tree and a git branch, GitHub-PR style"
 
 [[bin]]
 name = "branchdiff"
