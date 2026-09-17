@@ -13,6 +13,9 @@ pub struct ChangedFile {
     pub path: String,
     /// Original path when the file was renamed/copied.
     pub old_path: Option<String>,
+    /// True for files that exist on disk but are not yet tracked by git. These
+    /// need a `--no-index` diff since `git diff <branch>` ignores them.
+    pub untracked: bool,
 }
 
 fn run_git(args: &[&str]) -> Result<std::process::Output> {
@@ -66,6 +69,7 @@ pub fn changed_files(branch: &str) -> Result<Vec<ChangedFile>> {
                 status,
                 path: new,
                 old_path: Some(old),
+                untracked: false,
             });
         } else {
             let path = parts.next().unwrap_or("").to_string();
@@ -76,10 +80,67 @@ pub fn changed_files(branch: &str) -> Result<Vec<ChangedFile>> {
                 status,
                 path,
                 old_path: None,
+                untracked: false,
             });
         }
     }
+
+    // `git diff` only knows about tracked paths, so files that exist on disk but
+    // have never been `git add`ed are invisible above. Surface them too, as
+    // additions, so the working tree is shown in full.
+    for path in untracked_files()? {
+        files.push(ChangedFile {
+            status: 'A',
+            path,
+            old_path: None,
+            untracked: true,
+        });
+    }
+
     Ok(files)
+}
+
+/// Paths that exist in the working tree but are not tracked by git, honoring
+/// `.gitignore` (so build artifacts and the like are left out).
+fn untracked_files() -> Result<Vec<String>> {
+    let out = run_git(&["ls-files", "--others", "--exclude-standard"])?;
+    if !out.status.success() {
+        bail!(
+            "git ls-files failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    Ok(text
+        .lines()
+        .map(str::trim_end)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect())
+}
+
+/// Name of the branch currently checked out in the working tree, or a short
+/// commit hash when in a detached-HEAD state.
+pub fn current_branch() -> Result<String> {
+    let out = run_git(&["rev-parse", "--abbrev-ref", "HEAD"])?;
+    if out.status.success() {
+        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !name.is_empty() && name != "HEAD" {
+            return Ok(name);
+        }
+    }
+    // Detached HEAD (or the rev-parse above failed): fall back to a short hash.
+    let out = run_git(&["rev-parse", "--short", "HEAD"])?;
+    if !out.status.success() {
+        bail!(
+            "git rev-parse failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(format!(
+        "@{}",
+        String::from_utf8_lossy(&out.stdout).trim()
+    ))
 }
 
 /// Contents of a file at a given revision (`git show <rev>:<path>`).
@@ -97,6 +158,22 @@ pub fn read_file_at(rev: &str, path: &str) -> Result<String> {
 
 /// Raw unified diff text for a single changed file (branch vs. working tree).
 pub fn file_diff(branch: &str, file: &ChangedFile) -> Result<String> {
+    // Untracked files aren't in git's index, so `git diff <branch>` skips them.
+    // Diff the on-disk file against /dev/null instead, so every line reads as an
+    // addition.
+    if file.untracked {
+        let out = run_git(&["diff", "--no-color", "--no-index", "--", "/dev/null", &file.path])?;
+        // `--no-index` exits 1 when the files differ (the normal case for a new
+        // file) and 0 when they're identical; only anything else is an error.
+        return match out.status.code() {
+            Some(0) | Some(1) => Ok(String::from_utf8_lossy(&out.stdout).to_string()),
+            _ => bail!(
+                "git diff failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        };
+    }
+
     let mut args: Vec<String> = vec![
         "diff".into(),
         "-M".into(),
@@ -202,6 +279,35 @@ mod tests {
     }
 
     #[test]
+    fn untracked_files_are_listed_and_diffed() {
+        let _guard = CWD_LOCK.lock().unwrap();
+        let dir = make_repo();
+        std::env::set_current_dir(&dir).unwrap();
+
+        // A brand-new file that has never been `git add`ed, plus one that is
+        // git-ignored (which must NOT show up).
+        fs::write(dir.join("untracked.txt"), "fresh\nlines\n").unwrap();
+        fs::write(dir.join(".gitignore"), "ignored.txt\n").unwrap();
+        fs::write(dir.join("ignored.txt"), "nope\n").unwrap();
+
+        let files = changed_files("base").unwrap();
+        let by_path: HashMap<&str, &ChangedFile> =
+            files.iter().map(|f| (f.path.as_str(), f)).collect();
+
+        let untracked = by_path["untracked.txt"];
+        assert_eq!(untracked.status, 'A');
+        assert!(untracked.untracked);
+        assert!(!by_path.contains_key("ignored.txt"));
+
+        // Its diff shows every line as an addition.
+        let raw = file_diff("base", untracked).unwrap();
+        assert!(raw.contains("+fresh"));
+        assert!(raw.contains("+lines"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn file_diff_and_read_and_branch() {
         let _guard = CWD_LOCK.lock().unwrap();
         let dir = make_repo();
@@ -212,6 +318,7 @@ mod tests {
             status: 'M',
             path: "keep.txt".into(),
             old_path: None,
+            untracked: false,
         };
         let raw = file_diff("base", &modified).unwrap();
         assert!(raw.contains("-beta"));

@@ -56,7 +56,7 @@ fn draw_title(f: &mut Frame, area: Rect, app: &App) {
         Span::raw("  "),
         Span::styled(app.branch.clone(), Style::default().fg(DEL).add_modifier(Modifier::BOLD)),
         Span::styled(" … ", Style::default().fg(CTX)),
-        Span::styled("working tree", Style::default().fg(ADD).add_modifier(Modifier::BOLD)),
+        Span::styled(app.current_branch.clone(), Style::default().fg(ADD).add_modifier(Modifier::BOLD)),
         Span::styled(
             format!("   ({} files)", app.files.len()),
             Style::default().fg(CTX),

@@ -34,6 +34,8 @@ pub enum Focus {
 pub struct App {
     /// The branch (or ref) the working tree is being diffed against.
     pub branch: String,
+    /// The branch currently checked out in the working tree (the "head" side).
+    pub current_branch: String,
     pub files: Vec<ChangedFile>,
     pub roots: Vec<Node>,
     pub expanded: HashSet<String>,
@@ -82,8 +84,10 @@ impl App {
         let roots = tree::build_tree(&files);
         let mut expanded = HashSet::new();
         tree::all_dir_paths(&roots, &mut expanded);
+        let current_branch = git::current_branch().unwrap_or_else(|_| "working tree".to_string());
         let mut app = App {
             branch,
+            current_branch,
             files,
             roots,
             expanded,
@@ -183,6 +187,11 @@ impl App {
         let prev_file = self.current_file.map(|i| self.files[i].path.clone());
         let prev_scroll = self.diff_scroll;
         let prev_hscroll = self.diff_hscroll;
+
+        // The checked-out branch may have changed since the last refresh.
+        if let Ok(branch) = git::current_branch() {
+            self.current_branch = branch;
+        }
 
         self.files = files;
         self.roots = tree::build_tree(&self.files);

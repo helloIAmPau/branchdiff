@@ -142,6 +142,7 @@ mod tests {
             status,
             path: path.to_string(),
             old_path: None,
+            untracked: false,
         }
     }
 
