@@ -35,11 +35,9 @@ fn main() -> Result<()> {
     let branch = cli.branch;
     git::verify_ref(&branch)?;
 
+    // Open the app even when there are no differences: an empty file list still
+    // renders (empty tree + an explanatory message in the diff panel).
     let files = git::changed_files(&branch)?;
-    if files.is_empty() {
-        println!("No differences between {branch} and the working tree.");
-        return Ok(());
-    }
 
     let mut app = app::App::new(branch, files);
 

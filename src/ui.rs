@@ -144,6 +144,7 @@ fn draw_diff(f: &mut Frame, area: Rect, app: &mut App) {
                 _ => format!(" {} ", file.path),
             }
         }
+        None if app.files.is_empty() => " (no differences) ".to_string(),
         None => " (no file selected) ".to_string(),
     };
     let mode = if app.side_by_side { "split" } else { "unified" };
@@ -179,6 +180,13 @@ fn draw_diff(f: &mut Frame, area: Rect, app: &mut App) {
                 None => vec![Line::from("Loading…")],
             }
         }
+        None if app.files.is_empty() => message_lines(
+            &format!(
+                "No differences between {} and the working tree.",
+                app.branch
+            ),
+            CTX,
+        ),
         None => vec![Line::from("Select a file in the tree to view its diff.")],
     };
 
