@@ -206,8 +206,38 @@ fn mode_color(mode: EditMode) -> Color {
     match mode {
         EditMode::Normal => Color::Blue,
         EditMode::Insert => Color::Green,
-        EditMode::Command => Color::Magenta,
+        EditMode::Command | EditMode::Search => Color::Magenta,
+        EditMode::Visual | EditMode::VisualLine => Color::Rgb(215, 153, 33), // amber
     }
+}
+
+/// Background applied to the current visual selection.
+const SEL_BG: Color = Color::Rgb(58, 74, 110);
+
+/// For a given editor line, return the `(base_bg, emph_range)` to apply so the
+/// visual selection is highlighted. Linewise selections colour the whole row;
+/// charwise selections colour just the covered char range.
+fn sel_line_style(
+    sel: Option<((usize, usize), (usize, usize))>,
+    linewise: bool,
+    y: usize,
+    len: usize,
+) -> (Option<Color>, Option<(usize, usize)>) {
+    let Some((s, e)) = sel else {
+        return (None, None);
+    };
+    if y < s.0 || y > e.0 {
+        return (None, None);
+    }
+    if linewise {
+        return (Some(SEL_BG), None);
+    }
+    let start = if y == s.0 { s.1 } else { 0 };
+    let end = if y == e.0 { (e.1 + 1).min(len) } else { len };
+    if start >= end {
+        return (None, None);
+    }
+    (None, Some((start, end)))
 }
 
 fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
@@ -257,6 +287,9 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
         ed.left = ed.cx + 1 - text_w;
     }
 
+    let sel = ed.selection();
+    let linewise = ed.mode == EditMode::VisualLine;
+
     let mut out: Vec<Line<'static>> = Vec::new();
     for i in ed.top..(ed.top + text_h).min(total) {
         let lineno = format!("{:>w$} ", i + 1, w = gutter - 1);
@@ -267,12 +300,13 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
         } else {
             Style::default().fg(GUT)
         };
+        let (sel_base, sel_emph) = sel_line_style(sel, linewise, i, display.chars().count());
         let mut spans = vec![Span::styled(lineno, num_style)];
         spans.extend(fill_body(
             &display,
-            None,
-            None,
-            Color::Reset,
+            sel_emph,
+            sel_base,
+            SEL_BG,
             &fgs,
             TEXT,
             ed.left,
@@ -297,9 +331,10 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
         width: inner.width,
         height: 1,
     };
-    let status_line = if ed.mode == EditMode::Command {
+    let status_line = if ed.mode == EditMode::Command || ed.mode == EditMode::Search {
+        let prefix = if ed.mode == EditMode::Search { '/' } else { ':' };
         Line::from(Span::styled(
-            format!(":{}", ed.cmd),
+            format!("{prefix}{}", ed.cmd),
             Style::default().fg(Color::White),
         ))
     } else {
@@ -325,7 +360,7 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
 
     // Real terminal cursor.
     let right_edge = inner.x + inner.width - 1;
-    if ed.mode == EditMode::Command {
+    if ed.mode == EditMode::Command || ed.mode == EditMode::Search {
         let cx = inner.x + 1 + ed.cmd.chars().count() as u16;
         f.set_cursor_position((cx.min(right_edge), status_y));
     } else {
@@ -347,17 +382,26 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
             key(" i/a/o"),
             lbl("insert"),
             sep(),
-            key("Esc"),
-            lbl("normal"),
+            key("v/V"),
+            lbl("visual"),
             sep(),
-            key("x/dd/D"),
-            lbl("delete"),
+            key("x/d/y/p"),
+            lbl("cut/yank/paste"),
             sep(),
-            key("hjkl 0 $ w b gg G"),
-            lbl("move"),
+            key("u"),
+            lbl("undo"),
             sep(),
-            key(":w :q :wq"),
-            lbl("save/quit editor"),
+            key("^r"),
+            lbl("redo"),
+            sep(),
+            key("/n"),
+            lbl("search"),
+            sep(),
+            key(":N"),
+            lbl("goto line"),
+            sep(),
+            key(":w :q"),
+            lbl("save/quit"),
         ]);
         f.render_widget(
             Paragraph::new(line).style(Style::default().bg(Color::Rgb(20, 30, 20))),
