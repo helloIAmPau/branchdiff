@@ -193,8 +193,17 @@ impl App {
             self.current_branch = branch;
         }
 
+        // Preserve the tree's overall state across the reload: if every folder
+        // was expanded, expand any folders that appear in the new tree too;
+        // otherwise leave the expansion set alone so folders stay compacted.
+        let was_fully_expanded = self.tree_fully_expanded();
         self.files = files;
         self.roots = tree::build_tree(&self.files);
+        if was_fully_expanded {
+            let mut all = HashSet::new();
+            tree::all_dir_paths(&self.roots, &mut all);
+            self.expanded = all;
+        }
         self.diff_cache.clear();
         self.current_file = None;
         // recompute_visible restores the selection by path from the old view.
@@ -210,6 +219,15 @@ impl App {
                 self.diff_hscroll = prev_hscroll;
             }
         }
+    }
+
+    /// True when every directory in the current tree is expanded (the default
+    /// "expand-all" state). An empty tree counts as expanded. Used on refresh to
+    /// decide whether newly-appearing folders should start expanded.
+    fn tree_fully_expanded(&self) -> bool {
+        let mut dirs = HashSet::new();
+        tree::all_dir_paths(&self.roots, &mut dirs);
+        dirs.iter().all(|d| self.expanded.contains(d))
     }
 
     fn recompute_visible(&mut self) {
