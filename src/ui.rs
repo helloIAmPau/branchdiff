@@ -3,7 +3,6 @@
 
 use crate::app::{App, Focus};
 use crate::diff::{self, FileDiff, LineKind, SideRow};
-use crate::editor::EditMode;
 use crate::highlight::Highlighter;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -11,12 +10,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 use syntect::parsing::SyntaxReference;
+use tui_term::widget::PseudoTerminal;
 
 // Foreground accents (title branch names, tree status letters), Claude Code style.
 const ADD: Color = Color::Rgb(63, 185, 80); // #3fb950 green
 const DEL: Color = Color::Rgb(248, 81, 73); // #f85149 red
 const CTX: Color = Color::Gray;
-const GUT: Color = Color::DarkGray;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let root = Layout::vertical([
@@ -42,8 +41,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
 
     app.diff_area = right;
-    if app.editor.is_some() {
-        draw_editor(f, right, app);
+    if app.pty_editor.is_some() {
+        draw_pty_editor(f, right, app);
     } else {
         draw_diff(f, right, app);
     }
@@ -202,63 +201,24 @@ fn draw_diff(f: &mut Frame, area: Rect, app: &mut App) {
     f.render_widget(para, inner);
 }
 
-fn mode_color(mode: EditMode) -> Color {
-    match mode {
-        EditMode::Normal => Color::Blue,
-        EditMode::Insert => Color::Green,
-        EditMode::Command | EditMode::Search => Color::Magenta,
-        EditMode::Visual | EditMode::VisualLine => Color::Rgb(215, 153, 33), // amber
-    }
-}
-
-/// Background applied to the current visual selection.
-const SEL_BG: Color = Color::Rgb(58, 74, 110);
-
-/// For a given editor line, return the `(base_bg, emph_range)` to apply so the
-/// visual selection is highlighted. Linewise selections colour the whole row;
-/// charwise selections colour just the covered char range.
-fn sel_line_style(
-    sel: Option<((usize, usize), (usize, usize))>,
-    linewise: bool,
-    y: usize,
-    len: usize,
-) -> (Option<Color>, Option<(usize, usize)>) {
-    let Some((s, e)) = sel else {
-        return (None, None);
+/// Render the embedded PTY editor: the child's terminal screen (as parsed by
+/// `vt100`) drawn via `tui-term`'s `PseudoTerminal` widget, so this shows
+/// exactly what a real terminal running vim would show, cursor included.
+fn draw_pty_editor(f: &mut Frame, area: Rect, app: &mut App) {
+    let Some(ed) = app.pty_editor.as_ref() else {
+        return;
     };
-    if y < s.0 || y > e.0 {
-        return (None, None);
-    }
-    if linewise {
-        return (Some(SEL_BG), None);
-    }
-    let start = if y == s.0 { s.1 } else { 0 };
-    let end = if y == e.0 { (e.1 + 1).min(len) } else { len };
-    if start >= end {
-        return (None, None);
-    }
-    (None, Some((start, end)))
-}
 
-fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
-    let hl = &app.highlighter;
-    let ed = match app.editor.as_mut() {
-        Some(ed) => ed,
-        None => return,
-    };
-    let syntax = hl.syntax_for(&ed.path);
-
-    let dirty = if ed.dirty { " [+]" } else { "" };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Green))
         .title(Span::styled(
-            format!(" {}{} ", ed.path, dirty),
+            format!(" {} ", ed.path),
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
         ))
         .title(
             Line::from(Span::styled(
-                " EDIT ",
+                " VIM ",
                 Style::default().fg(Color::Black).bg(Color::Green),
             ))
             .right_aligned(),
@@ -266,109 +226,20 @@ fn draw_editor(f: &mut Frame, area: Rect, app: &mut App) {
 
     let inner = block.inner(area);
     f.render_widget(block, area);
-    if inner.height < 2 || inner.width < 4 {
+    if inner.height == 0 || inner.width == 0 {
         return;
     }
 
-    let text_h = inner.height.saturating_sub(1) as usize; // reserve last row for status
-    let total = ed.lines.len();
-    let gutter = total.to_string().len().max(3) + 1; // digits + trailing space
-    let text_w = (inner.width as usize).saturating_sub(gutter + 1).max(1);
+    let parser = ed.parser();
+    let screen = parser.screen();
+    f.render_widget(PseudoTerminal::new(screen), inner);
 
-    // Keep the cursor within the viewport (vertical + horizontal scroll).
-    if ed.cy < ed.top {
-        ed.top = ed.cy;
-    } else if ed.cy >= ed.top + text_h {
-        ed.top = ed.cy + 1 - text_h;
-    }
-    if ed.cx < ed.left {
-        ed.left = ed.cx;
-    } else if ed.cx >= ed.left + text_w {
-        ed.left = ed.cx + 1 - text_w;
-    }
-
-    let sel = ed.selection();
-    let linewise = ed.mode == EditMode::VisualLine;
-
-    let mut out: Vec<Line<'static>> = Vec::new();
-    for i in ed.top..(ed.top + text_h).min(total) {
-        let lineno = format!("{:>w$} ", i + 1, w = gutter - 1);
-        let display = ed.lines[i].replace('\t', "    ");
-        let fgs = hl.line_colors(syntax, &display);
-        let num_style = if i == ed.cy {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default().fg(GUT)
-        };
-        let (sel_base, sel_emph) = sel_line_style(sel, linewise, i, display.chars().count());
-        let mut spans = vec![Span::styled(lineno, num_style)];
-        spans.extend(fill_body(
-            &display,
-            sel_emph,
-            sel_base,
-            SEL_BG,
-            &fgs,
-            TEXT,
-            ed.left,
-            text_w,
+    if !screen.hide_cursor() {
+        let (row, col) = screen.cursor_position();
+        f.set_cursor_position((
+            (inner.x + col).min(inner.x + inner.width - 1),
+            (inner.y + row).min(inner.y + inner.height - 1),
         ));
-        out.push(Line::from(spans));
-    }
-
-    let text_area = Rect {
-        x: inner.x,
-        y: inner.y,
-        width: inner.width,
-        height: text_h as u16,
-    };
-    f.render_widget(Paragraph::new(out), text_area);
-
-    // Status / command line along the bottom row of the panel.
-    let status_y = inner.y + inner.height - 1;
-    let status_area = Rect {
-        x: inner.x,
-        y: status_y,
-        width: inner.width,
-        height: 1,
-    };
-    let status_line = if ed.mode == EditMode::Command || ed.mode == EditMode::Search {
-        let prefix = if ed.mode == EditMode::Search { '/' } else { ':' };
-        Line::from(Span::styled(
-            format!("{prefix}{}", ed.cmd),
-            Style::default().fg(Color::White),
-        ))
-    } else {
-        Line::from(vec![
-            Span::styled(
-                format!(" {} ", ed.mode_label()),
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(mode_color(ed.mode))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("  {}:{}  ", ed.cy + 1, ed.cx + 1),
-                Style::default().fg(CTX),
-            ),
-            Span::styled(ed.status.clone(), Style::default().fg(CTX)),
-        ])
-    };
-    f.render_widget(
-        Paragraph::new(status_line).style(Style::default().bg(Color::Rgb(25, 25, 30))),
-        status_area,
-    );
-
-    // Real terminal cursor.
-    let right_edge = inner.x + inner.width - 1;
-    if ed.mode == EditMode::Command || ed.mode == EditMode::Search {
-        let cx = inner.x + 1 + ed.cmd.chars().count() as u16;
-        f.set_cursor_position((cx.min(right_edge), status_y));
-    } else {
-        let sx = inner.x + gutter as u16 + (ed.cx - ed.left) as u16;
-        let sy = inner.y + (ed.cy - ed.top) as u16;
-        if sy < status_y {
-            f.set_cursor_position((sx.min(right_edge), sy));
-        }
     }
 }
 
@@ -377,31 +248,16 @@ fn draw_footer(f: &mut Frame, area: Rect, app: &App) {
     let sep = || Span::styled("  ", Style::default());
     let lbl = |t: &str| Span::styled(t.to_string(), Style::default().fg(CTX));
 
-    if app.editor.is_some() {
+    if app.pty_editor.is_some() {
         let line = Line::from(vec![
-            key(" i/a/o"),
-            lbl("insert"),
+            key(" "),
+            lbl("editing in a real vim — every key goes straight to it"),
             sep(),
-            key("v/V"),
-            lbl("visual"),
+            key(":wq"),
+            lbl("save & return"),
             sep(),
-            key("x/d/y/p"),
-            lbl("cut/yank/paste"),
-            sep(),
-            key("u"),
-            lbl("undo"),
-            sep(),
-            key("^r"),
-            lbl("redo"),
-            sep(),
-            key("/n"),
-            lbl("search"),
-            sep(),
-            key(":N"),
-            lbl("goto line"),
-            sep(),
-            key(":w :q"),
-            lbl("save/quit"),
+            key(":q!"),
+            lbl("discard & return"),
         ]);
         f.render_widget(
             Paragraph::new(line).style(Style::default().bg(Color::Rgb(20, 30, 20))),

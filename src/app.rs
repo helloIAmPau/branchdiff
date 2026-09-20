@@ -1,9 +1,9 @@
 //! Application state and the event loop.
 
 use crate::diff::{self, FileDiff};
-use crate::editor::Editor;
 use crate::git::{self, ChangedFile};
 use crate::highlight::Highlighter;
+use crate::pty::PtyEditor;
 use crate::tree::{self, Node, VisibleRow};
 use crate::ui;
 use anyhow::Result;
@@ -58,8 +58,9 @@ pub struct App {
     pub tree_area: Rect,
     pub tree_inner: Rect,
     pub diff_area: Rect,
-    /// When present, the right panel is a modal editor for the current file.
-    pub editor: Option<Editor>,
+    /// When present, the right panel is a real terminal (vim/$EDITOR) running
+    /// over a PTY for the current file.
+    pub pty_editor: Option<PtyEditor>,
     /// Shared syntax highlighter (syntect syntaxes + theme).
     pub highlighter: Highlighter,
     pub should_quit: bool,
@@ -106,7 +107,7 @@ impl App {
             tree_area: Rect::default(),
             tree_inner: Rect::default(),
             diff_area: Rect::default(),
-            editor: None,
+            pty_editor: None,
             highlighter: Highlighter::new(),
             should_quit: false,
         };
@@ -134,6 +135,27 @@ impl App {
             if need_redraw {
                 terminal.draw(|f| ui::draw(f, self))?;
                 need_redraw = false;
+
+                // The panel size draw just computed is the PTY's target size.
+                if let Some(ed) = self.pty_editor.as_mut() {
+                    let rows = self.diff_area.height.saturating_sub(2);
+                    let cols = self.diff_area.width.saturating_sub(2);
+                    ed.resize(rows, cols);
+                }
+            }
+
+            // The child (vim) exits on its own (`:q`, `:wq`, ...); notice that
+            // here rather than waiting for another keypress to reveal it.
+            if let Some(ed) = self.pty_editor.as_mut() {
+                if ed.has_exited() {
+                    self.pty_editor = None;
+                    if let Some(idx) = self.current_file {
+                        self.diff_cache.remove(&idx);
+                        self.current_file = None;
+                        self.load_selected_file();
+                    }
+                    need_redraw = true;
+                }
             }
 
             // Coalesce filesystem events: (re)start the debounce timer on any
@@ -147,7 +169,7 @@ impl App {
             // Apply the refresh once things have been quiet for the debounce
             // window (but never yank state out from under an open editor).
             if let Some(t) = pending_since {
-                if t.elapsed() >= REFRESH_DEBOUNCE && self.editor.is_none() {
+                if t.elapsed() >= REFRESH_DEBOUNCE && self.pty_editor.is_none() {
                     self.refresh();
                     pending_since = None;
                     need_redraw = true;
@@ -168,6 +190,12 @@ impl App {
                     Event::Resize(_, _) => need_redraw = true,
                     _ => {}
                 }
+            }
+
+            // The PTY produces output asynchronously (not in response to our
+            // own key events), so keep repainting while it's live.
+            if self.pty_editor.is_some() {
+                need_redraw = true;
             }
         }
         Ok(())
@@ -281,19 +309,12 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
-        // While the editor is open it owns every keystroke (vim-style); the only
-        // way out is `:q`, which sets `quit`.
-        if let Some(ed) = self.editor.as_mut() {
-            ed.handle_key(key);
-            if ed.quit {
-                self.editor = None;
-                // Drop the cached diff so it is re-read on next view.
-                if let Some(idx) = self.current_file {
-                    self.diff_cache.remove(&idx);
-                    self.current_file = None;
-                    self.load_selected_file();
-                }
-            }
+        // While the PTY editor is open it owns every keystroke: forward raw
+        // bytes to the child (vim) instead of interpreting them ourselves.
+        // Exit is noticed asynchronously in `run` once the child process
+        // actually terminates (e.g. after `:wq`).
+        if let Some(ed) = self.pty_editor.as_mut() {
+            ed.send_key(key);
             return;
         }
 
@@ -358,24 +379,24 @@ impl App {
         }
     }
 
-    /// Open the current file in the modal editor. Prefers the working-tree copy,
-    /// falling back to the head revision's contents.
+    /// Open the current file in a real terminal editor (`$EDITOR`, falling
+    /// back to `vim`), embedded as a PTY-backed pane in place of the diff. It
+    /// opens the working-tree path directly, so edits saved with `:w` land on
+    /// disk exactly as they would in any other terminal.
     fn open_editor(&mut self) {
         let Some(idx) = self.current_file else {
             return;
         };
         let path = self.files[idx].path.clone();
-        let content = std::fs::read_to_string(&path)
-            .ok()
-            .or_else(|| git::read_file_at(&self.branch, &path).ok())
-            .unwrap_or_default();
-        let mut ed = Editor::new(path, &content);
-        ed.status = "-- editing working tree — :w save · :q quit --".into();
-        self.editor = Some(ed);
+        let rows = self.diff_area.height.saturating_sub(2);
+        let cols = self.diff_area.width.saturating_sub(2);
+        if let Ok(ed) = PtyEditor::spawn(&path, rows, cols) {
+            self.pty_editor = Some(ed);
+        }
     }
 
     fn handle_mouse(&mut self, m: MouseEvent) {
-        if self.editor.is_some() {
+        if self.pty_editor.is_some() {
             return;
         }
         let (x, y) = (m.column, m.row);

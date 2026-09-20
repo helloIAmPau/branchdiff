@@ -16,6 +16,12 @@ clap = { version = "4", features = ["derive"] }
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 # filesystem watching for auto-refresh
 notify = "6"
+# real terminal (vim/$EDITOR) embedded as a PTY-backed pane for the [e] key.
+# Pinned to the tui-term 0.2 line, the last one built on ratatui 0.29 (0.3+
+# moved to the split ratatui-core/ratatui-widgets crates from ratatui 0.30+).
+portable-pty = "0.8"
+tui-term = "0.2"
+vt100 = "0.15"
 
 [profile.release]
 opt-level = 2

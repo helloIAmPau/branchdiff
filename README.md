@@ -83,7 +83,7 @@ before you commit or open a PR.
 | `Tab` | switch focus between tree and diff |
 | `s` | toggle unified ⇄ side-by-side |
 | `t` | hide / show the file tree |
-| `e` | edit the current file (vim-style, right panel) |
+| `e` | edit the current file (embeds real `$EDITOR`/vim, right panel) |
 | `←`/`→` (in diff) | pan horizontally on long lines |
 | `PgUp`/`PgDn`, `Ctrl-u`/`Ctrl-d` | page the diff |
 | `g`/`G` | top / bottom |
@@ -100,24 +100,22 @@ before you commit or open a PR.
 | Wheel over the tree | move the selection up/down |
 | Wheel over the diff | scroll the diff up/down |
 
-## Editing (vim-style)
+## Editing (embedded real vim)
 
-Press `e` to turn the right panel into a modal editor for the selected file. It
-loads the working-tree copy (falling back to the `branch` revision) and, on `:w`,
-writes back to the file on disk. The buffer is syntax-highlighted with the same
-GitHub Dark theme.
+Press `e` to turn the right panel into a **real terminal**: `branchdiff` opens
+`$EDITOR` (falling back to `vim`) on the selected file's working-tree path,
+attached to a pseudo-tty (`portable-pty`) whose output is parsed by `vt100` and
+rendered in place as a `tui-term` widget — so it's the actual editor, not an
+emulation, complete with its own modes, plugins, and status/command line. Every
+keystroke is forwarded straight to it (with `Ctrl`/arrows/function keys
+translated to the byte sequences a real terminal would send), and the pane is
+kept sized to match the panel. It returns to the diff view automatically as
+soon as the editor process exits (`:wq`, `:q!`, ...).
 
-- **Modes:** Normal · Insert · Command (`:`). `Esc` returns to Normal.
-- **Enter insert:** `i` `a` `I` `A` `o` `O`
-- **Motions:** `h` `j` `k` `l`, `0` `$` `^`, `w` `b`, `gg` `G` (arrows/Home/End too)
-- **Edits:** `x` (char), `dd` (line), `D` (to end of line)
-- **Commands:** `:w` write · `:q` quit (blocked if unsaved) · `:q!` force-quit ·
-  `:wq` / `:x` write & quit
-
-The bottom row shows the current mode, cursor `line:col`, and messages.
+Requires `vim` (or `$EDITOR`) to be installed and on `PATH`.
 
 > Note: the diff view compares `branch` against your **working tree**, so edits
-> you save from the built-in editor show up in the diff on the next auto-refresh
+> you save from the embedded editor show up in the diff on the next auto-refresh
 > — no commit required.
 
 ## How it works
@@ -127,6 +125,6 @@ The bottom row shows the current mode, cursor `line:col`, and messages.
 - `src/diff.rs` — parse unified-diff text into hunks/lines and derive side-by-side rows.
 - `src/tree.rs` — build the collapsible file tree from changed paths.
 - `src/app.rs` — application state and the input event loop.
-- `src/editor.rs` — the modal vim-style text editor.
+- `src/pty.rs` — the embedded real-editor PTY session (`portable-pty` + `vt100`).
 - `src/highlight.rs` — syntect syntax highlighting (per-character foreground colours).
 - `src/ui.rs` — all rendering (ratatui), incl. the delta-style diff builders.

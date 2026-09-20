@@ -1,8 +1,8 @@
 mod app;
 mod diff;
-mod editor;
 mod git;
 mod highlight;
+mod pty;
 mod tree;
 mod ui;
 
