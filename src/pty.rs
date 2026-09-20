@@ -97,7 +97,7 @@ impl PtyEditor {
             pixel_width: 0,
             pixel_height: 0,
         });
-        self.parser.lock().unwrap().screen_mut().set_size(rows, cols);
+        self.parser.lock().unwrap().set_size(rows, cols);
     }
 
     /// Forward a key event to the child as the raw bytes a real terminal
