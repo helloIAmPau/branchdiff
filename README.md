@@ -83,7 +83,7 @@ before you commit or open a PR.
 | `Tab` | switch focus between tree and diff |
 | `s` | toggle unified ⇄ side-by-side |
 | `t` | hide / show the file tree |
-| `e` | edit the current file (embeds real `$EDITOR`/vim, right panel) |
+| `e` | edit the current file (embeds real vim, right panel) |
 | `←`/`→` (in diff) | pan horizontally on long lines |
 | `PgUp`/`PgDn`, `Ctrl-u`/`Ctrl-d` | page the diff |
 | `g`/`G` | top / bottom |
@@ -102,17 +102,22 @@ before you commit or open a PR.
 
 ## Editing (embedded real vim)
 
-Press `e` to turn the right panel into a **real terminal**: `branchdiff` opens
-`$EDITOR` (falling back to `vim`) on the selected file's working-tree path,
-attached to a pseudo-tty (`portable-pty`) whose output is parsed by `vt100` and
-rendered in place as a `tui-term` widget — so it's the actual editor, not an
-emulation, complete with its own modes, plugins, and status/command line. Every
-keystroke is forwarded straight to it (with `Ctrl`/arrows/function keys
-translated to the byte sequences a real terminal would send), and the pane is
-kept sized to match the panel. It returns to the diff view automatically as
-soon as the editor process exits (`:wq`, `:q!`, ...).
+Press `e` to turn the right panel into a **real terminal** running `vim` on the
+selected file's working-tree path, attached to a pseudo-tty (`portable-pty`)
+whose output is parsed by `vt100` and rendered in place as a `tui-term` widget
+— so it's the actual editor, not an emulation, complete with its own modes,
+plugins, and status/command line. Every keystroke is forwarded straight to it
+(with `Ctrl`/arrows/function keys translated to the byte sequences a real
+terminal would send), and the pane is kept sized to match the panel. It
+returns to the diff view automatically as soon as vim exits (`:wq`, `:q!`,
+...).
 
-Requires `vim` (or `$EDITOR`) to be installed and on `PATH`.
+This is always `vim`, not `$EDITOR` — the environment's default editor varies
+(many Linux distros/containers set `EDITOR=nano`) and behaves completely
+differently (non-modal), which would silently break the experience this
+feature is built around.
+
+Requires `vim` to be installed and on `PATH`.
 
 > Note: the diff view compares `branch` against your **working tree**, so edits
 > you save from the embedded editor show up in the diff on the next auto-refresh

@@ -232,15 +232,16 @@ fn draw_pty_editor(f: &mut Frame, area: Rect, app: &mut App) {
 
     let parser = ed.parser();
     let screen = parser.screen();
-    // On a cell with existing text, tui-term's default cursor reverses it,
-    // which reads clearly. On an empty cell (end of line, blank line, fresh
-    // file) it instead draws a "█" glyph in a dim grey foreground with no
-    // background — a solid block, so REVERSED alone would just swap which
-    // default color fills it, not create a highlight. Use a reversed space
-    // instead, which paints a proper solid highlighted block either way.
+    // Render the cursor as an underscore instead of a filled block: on a cell
+    // with existing text, tui-term only ever restyles that cell (the glyph
+    // itself is untouched), so UNDERLINED leaves fg/bg alone entirely —
+    // there's no color to get wrong. On an empty cell (end of line, blank
+    // line) there's no character to underline, so draw a literal "_" glyph.
+    let underline = Style::default().add_modifier(Modifier::UNDERLINED);
     let cursor = Cursor::default()
-        .symbol(" ")
-        .style(Style::default().add_modifier(Modifier::REVERSED));
+        .symbol("_")
+        .style(underline)
+        .overlay_style(underline);
     f.render_widget(PseudoTerminal::new(screen).cursor(cursor), inner);
 
     if !screen.hide_cursor() {

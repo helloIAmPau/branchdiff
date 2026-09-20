@@ -24,8 +24,13 @@ pub struct PtyEditor {
 }
 
 impl PtyEditor {
-    /// Spawn `$EDITOR` (falling back to `vim`) on `path`, attached to a PTY
-    /// sized `rows`x`cols`.
+    /// Spawn `vim` on `path`, attached to a PTY sized `rows`x`cols`.
+    ///
+    /// Deliberately always vim, not `$EDITOR`: this feature is specifically
+    /// "embed real vim", and respecting `$EDITOR` silently swaps in whatever
+    /// the environment happens to default to (e.g. Debian/Ubuntu containers
+    /// commonly set `EDITOR=nano`), which behaves completely differently
+    /// (non-modal — every key inserts text) and reads as broken.
     pub fn spawn(path: &str, rows: u16, cols: u16) -> Result<Self> {
         let rows = rows.max(1);
         let cols = cols.max(1);
@@ -38,8 +43,7 @@ impl PtyEditor {
             pixel_height: 0,
         })?;
 
-        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
-        let mut cmd = CommandBuilder::new(editor);
+        let mut cmd = CommandBuilder::new("vim");
         cmd.arg(path);
         cmd.env("TERM", "xterm-256color");
         // portable-pty defaults an unset cwd to the user's home directory (not
