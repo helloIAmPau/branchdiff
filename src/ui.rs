@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 use ratatui::Frame;
 use syntect::parsing::SyntaxReference;
-use tui_term::widget::PseudoTerminal;
+use tui_term::widget::{Cursor, PseudoTerminal};
 
 // Foreground accents (title branch names, tree status letters), Claude Code style.
 const ADD: Color = Color::Rgb(63, 185, 80); // #3fb950 green
@@ -232,7 +232,16 @@ fn draw_pty_editor(f: &mut Frame, area: Rect, app: &mut App) {
 
     let parser = ed.parser();
     let screen = parser.screen();
-    f.render_widget(PseudoTerminal::new(screen), inner);
+    // On a cell with existing text, tui-term's default cursor reverses it,
+    // which reads clearly. On an empty cell (end of line, blank line, fresh
+    // file) it instead draws a "█" glyph in a dim grey foreground with no
+    // background — a solid block, so REVERSED alone would just swap which
+    // default color fills it, not create a highlight. Use a reversed space
+    // instead, which paints a proper solid highlighted block either way.
+    let cursor = Cursor::default()
+        .symbol(" ")
+        .style(Style::default().add_modifier(Modifier::REVERSED));
+    f.render_widget(PseudoTerminal::new(screen).cursor(cursor), inner);
 
     if !screen.hide_cursor() {
         let (row, col) = screen.cursor_position();
