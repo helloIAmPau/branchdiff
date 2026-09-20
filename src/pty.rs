@@ -42,6 +42,12 @@ impl PtyEditor {
         let mut cmd = CommandBuilder::new(editor);
         cmd.arg(path);
         cmd.env("TERM", "xterm-256color");
+        // portable-pty defaults an unset cwd to the user's home directory (not
+        // the current process's), which would resolve `path` against the
+        // wrong directory since it's relative to the repo root.
+        if let Ok(cwd) = std::env::current_dir() {
+            cmd.cwd(cwd);
+        }
 
         let child = pair.slave.spawn_command(cmd)?;
         // Drop our copy of the slave end now that the child has its own: if we

@@ -143,19 +143,6 @@ pub fn current_branch() -> Result<String> {
     ))
 }
 
-/// Contents of a file at a given revision (`git show <rev>:<path>`).
-pub fn read_file_at(rev: &str, path: &str) -> Result<String> {
-    let spec = format!("{rev}:{path}");
-    let out = run_git(&["show", &spec])?;
-    if !out.status.success() {
-        bail!(
-            "git show failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
-}
-
 /// Raw unified diff text for a single changed file (branch vs. working tree).
 pub fn file_diff(branch: &str, file: &ChangedFile) -> Result<String> {
     // Untracked files aren't in git's index, so `git diff <branch>` skips them.
@@ -323,13 +310,6 @@ mod tests {
         let raw = file_diff("base", &modified).unwrap();
         assert!(raw.contains("-beta"));
         assert!(raw.contains("+BETA"));
-
-        // read_file_at pulls blob contents at a revision.
-        assert_eq!(read_file_at("head", "add.txt").unwrap(), "brand new\n");
-        assert_eq!(
-            read_file_at("base", "keep.txt").unwrap(),
-            "alpha\nbeta\ngamma\n"
-        );
 
         // verify_repo / verify_ref behaviour.
         assert!(verify_repo().is_ok());
